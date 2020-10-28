@@ -6,7 +6,7 @@ class Route:
                  passenger_traffic, cost_per_kilo, cost_per_hour, hourly_unevenness=1.25):
         self.number = number
         self.turnover_length = turnover_length
-        self.turnover_time =
+        self.turnover_time = turnover_time
         self.average_lenght = average_length
         self.removability = route_length / self.average_lenght
         self.hourly_unevenness = hourly_unevenness
