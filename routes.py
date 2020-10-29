@@ -46,8 +46,9 @@ class Vehicle:
 
 
 class Station(Route):
-    def __init__(self, number, vehicles, name, coords):
+    def __init__(self, number, vehicles, name, coords, direction):
         super().__init__(number, vehicles)
+        self.direction = direction  # направление движения (0 или 1)
         self.name = name  # название остановки
         self.coords = coords  # координаты остановки
 
@@ -78,17 +79,3 @@ class PassengerRoute:
         transport_distanation = calculate_distance(self.nearest_transport.get_coords(),
                                   self.start_station.coords)  # расстояние до ближайшего транспорта
         return transport_distanation / self.nearest_transport.get_speed()  # время прибытия транспорта
-
-
-trolleybus = Vehicle('тролейбус', 'ТГ-120', 40)
-TRANSPORT_LIST.append(trolleybus)
-third = Route('3', (trolleybus,))
-automobile_palace = Station('3', (trolleybus,), 'Дворец автомобилестроителей', (55.059447, 60.107223))
-fersman_street = Station('3', (trolleybus,), 'Улица Ферсмана', (55.055740, 60.108038))
-STATION_LIST.append(automobile_palace)
-STATION_LIST.append(fersman_street)
-
-me = PassengerRoute((55.060716, 60.111664), (55.054837, 60.108087))
-print(me.start_station)
-print(me.end_station)
-print(me.time_to_arrive())
