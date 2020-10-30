@@ -8,12 +8,13 @@ import hashlib
 import os
 import time
 from datetime import date
+from pymongo import MongoClient, GEO2D
 
 
 API_HOST = "www.map.gortransperm.ru"
 API_PATH = "/json/"
 API_REQUEST_RATE = 60  # Per minute
-CACHE_TIME = 15  # In seconds
+CACHE_TIME = 600  # In seconds
 CACHE_DIR = "cache/"
 CACHE_EXT = ".cache"
 
@@ -21,6 +22,10 @@ HTTP_CLIENT_IDLE = 1000  # In msec
 HTTP_MAX_ERRORS = 5
 
 DATE_FORMAT = "%d.%m.%Y"
+
+ROUTES_IDS = ("01", "02", "03", "802", "807")
+
+
 
 
 def __get_cache_filename(path_str):
@@ -67,7 +72,6 @@ def __go_request(path_need_data):
     conn = http.client.HTTPConnection(API_HOST, timeout=15)
     conn.request("GET", path_need_data)
     response_str = False
-    print(path_need_data)
     try:
         response = conn.getresponse().read()
         logging.info("Request send!")
@@ -129,26 +133,101 @@ def __get_data(type_data: str = '/ping', get_parametrs: dict = False):
 def load_routes_list(for_date=date.today()):
     # http://www.map.gortransperm.ru/json/route-types-tree/30.10.2020/
     data = __get_data('route-types-tree/{0}/'.format(for_date.strftime(DATE_FORMAT)))
-    print(data)
+    return data
 
-def load_bus_data(bus_id: int = 12970):
-    data = __get_data('/bus/', {"bus_id": bus_id})
-    print(data)
-    data = __get_data('/route_line/', {"bus_id": bus_id})
-    print(data)
 
-def pull_metric_data():
-    topics = ["""{
-    "metric": "catplace",
-    "value": 1,
-    "_": 1603983781180
-    }"""]
-    start_socket_client("wss://www.bustime.ru/ajax/metric", topics)
-    # start_socket_client("https://www.bustime.ru/ajax/metric", topics)
+def load_route_data(route_id: str = '02', for_date=date.today()):
+    # http://www.map.gortransperm.ru/json/full-route/30.10.2020/02
+    data = __get_data('full-route/{0}/{1}'.format(for_date.strftime(DATE_FORMAT), route_id))
+    return data
+
+
+def load_bus_data(bus_id: str = '804', timestamp: int = round(time.time())):
+    # http://www.map.gortransperm.ru/json/get-moving-autos/-804-?_=1604081243508
+    # http://www.map.gortransperm.ru/json/get-moving-autos/-807-?_=1604081243514
+    data = __get_data('get-moving-autos/-{0}-'.format(bus_id), {"_": timestamp})
+    return data
+
+def pull_route_info(route_id :str = "02", for_date=date.today()):
+    data = load_routes_list(for_date=for_date)
+    return_dict = False
+    for routes in data:
+        for route in routes['children']:
+            if route['routeId'] == route_id:
+                return_dict = {'id': route['routeId'],
+                               'route_number': route['routeNumber'],
+                               'title': route['title'],
+                               'type': routes['routeTypeId'],
+                               'type_title': routes['title'],
+                               }
+                continue
+        if return_dict:
+            continue
+    return return_dict
+
+def pull_route_geometry(route_id: str = '02', direction: str = 'fwd'):
+    """
+    :param route_id:
+    :param direction: fwd | bkwd
+    :return: dicts with way paints
+    """
+    data = load_route_data(route_id=route_id)
+    if direction == 'fwd':
+        route_draft = data['fwdTrackGeom'].split("(")
+    else:
+        route_draft = data['bkwdTrackGeom'].split("(")
+    route_dict_ways = []
+    for item in route_draft:
+        if len(item) < 18:
+            continue
+        item = item.replace(')', '')
+        way_list = []
+        for point in item.split(", "):
+            if len(point) < 3:
+                continue
+            lat, lon = point.split(" ")
+            way_list.append({"lat": lat, "lon": lon})
+        route_dict_ways.append(way_list)
+    return route_dict_ways
+
+
+def pull_route_stations(route_id: str = '02', direction : str = 'fwd'):
+    stoppoints_list = []
+    data = load_route_data(route_id=route_id)
+    if direction == 'fwd':
+        stoppings_draft = data['fwdStoppoints']
+    else:
+        stoppings_draft = data['bkwdStoppoints']
+    for station in stoppings_draft:
+        location = station['location'].replace("POINT (", "").replace(")", "")
+        lat, lon = location.split(" ")
+        if 'note' in station:
+            station_note = station['note']
+        else:
+            station_note = ""
+        temp_dict = {'station_id': station['stoppointId'],
+                     'station_name': station['stoppointName'],
+                     'lat': lat,
+                     'lot': lon,
+                     'station_note': station_note,
+                     }
+        stoppoints_list.append(temp_dict)
+    return stoppoints_list
 
 
 def main_logic():
-    load_routes_list()
+    client = MongoClient()
+    db = client.ctrans
+    routes = db.routes
+    for route in ROUTES_IDS:
+        route_data = pull_route_info(route_id=route)
+        if not route_data:
+            continue
+        route_data['geometry_fwd'] = pull_route_geometry(route_id=route, direction="fwd")
+        route_data['geometry_bkwd'] = pull_route_geometry(route_id=route, direction="bkwd")
+        route_data['geometry_fwd'] = pull_route_stations(route_id=route, direction="fwd")
+        route_data['geometry_bkwd'] = pull_route_stations(route_id=route, direction="bkwd")
+        routes.insert_one(route_data)
     return 0
 
 
