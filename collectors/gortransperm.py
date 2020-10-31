@@ -24,6 +24,8 @@ HTTP_MAX_ERRORS = 5
 DATE_FORMAT = "%d.%m.%Y"
 
 ROUTES_IDS = ("01", "02", "03", "802", "807")
+ROUTES_IDS = ("01", )
+COORDS_ACCURACY = 6 # Number digits after dot
 
 
 
@@ -130,6 +132,16 @@ def __get_data(type_data: str = '/ping', get_parametrs: dict = False):
     return out_data
 
 
+def coord_to_int(dig_string:str, ndigits=COORDS_ACCURACY):
+    num_list = dig_string.split(".")
+    output_num = int(num_list[0]) * pow(10, ndigits) + int(num_list[1][0:ndigits])
+    return output_num
+
+def coord_from_int(number:int, ndigits=COORDS_ACCURACY):
+    output_str = "{0}.{1}".format(number // pow(10, ndigits), number % pow(10, ndigits))
+    return output_str
+
+
 def load_routes_list(for_date=date.today()):
     # http://www.map.gortransperm.ru/json/route-types-tree/30.10.2020/
     data = __get_data('route-types-tree/{0}/'.format(for_date.strftime(DATE_FORMAT)))
@@ -185,10 +197,38 @@ def pull_route_geometry(route_id: str = '02', direction: str = 'fwd'):
         for point in item.split(", "):
             if len(point) < 3:
                 continue
-            lat, lon = point.split(" ")
+            coords = point.split(" ")
+            lat = coord_to_int(coords[0])
+            lon = coord_to_int(coords[1])
             way_list.append({"lat": lat, "lon": lon})
         route_dict_ways.append(way_list)
     return route_dict_ways
+
+def detect_path_square(paths_list: list = False):
+    """
+    Defines the extreme northeast and southwest points of the path segment
+    Attention! For simplicity, it is calculated only for the northern hemisphere and east longitude.
+    # TODO: Make for the whole geosphere
+    :param point_list: List with path geometry
+    :return: list with two items:
+     0 - extrime SW points
+     1- extrime NE points
+    """
+    squares = []
+    for point_list in paths_list:
+        path_square = [{'lat': 90000000, 'lon': 180000000}, {'lat': 0, 'lon': 0}]
+        for point in point_list:
+            for coordinate_type in ['lat', 'lon']:
+                if point[coordinate_type] < path_square[0][coordinate_type]:\
+                    path_square[0][coordinate_type] = point[coordinate_type]
+                if point[coordinate_type] > path_square[1][coordinate_type]:
+                    path_square[1][coordinate_type] = point[coordinate_type]
+        squares.append({'start_lat': point_list,
+                        'start_lon': point_list,
+                        'end_lat': point_list,
+                        'end_lon': point_list,
+                            path_square})
+    return path_square
 
 
 def pull_route_stations(route_id: str = '02', direction : str = 'fwd'):
@@ -207,8 +247,8 @@ def pull_route_stations(route_id: str = '02', direction : str = 'fwd'):
             station_note = ""
         temp_dict = {'station_id': station['stoppointId'],
                      'station_name': station['stoppointName'],
-                     'lat': lat,
-                     'lot': lon,
+                     'lat': coord_to_int(lat),
+                     'lot': coord_to_int(lon),
                      'station_note': station_note,
                      }
         stoppoints_list.append(temp_dict)
@@ -219,15 +259,21 @@ def main_logic():
     client = MongoClient()
     db = client.ctrans
     routes = db.routes
+    stations = db.stations
+    path = db.paths
     for route in ROUTES_IDS:
+        # Parse busstops data
+        route_data['stations_fwd'] = pull_route_stations(route_id=route, direction="fwd")
+        route_data['stations_bkwd'] = pull_route_stations(route_id=route, direction="bkwd")
+        # Parse routers data
         route_data = pull_route_info(route_id=route)
         if not route_data:
             continue
         route_data['geometry_fwd'] = pull_route_geometry(route_id=route, direction="fwd")
         route_data['geometry_bkwd'] = pull_route_geometry(route_id=route, direction="bkwd")
-        route_data['geometry_fwd'] = pull_route_stations(route_id=route, direction="fwd")
-        route_data['geometry_bkwd'] = pull_route_stations(route_id=route, direction="bkwd")
-        routes.insert_one(route_data)
+
+        route_data['path_squares_fwd'] = detect_path_square([route_data['geometry_fwd'][0], route_data['geometry_fwd'][1]])
+    #     routes.insert_one(route_data)
     return 0
 
 
