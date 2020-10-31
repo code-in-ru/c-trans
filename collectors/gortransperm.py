@@ -204,7 +204,7 @@ def pull_route_geometry(route_id: str = '02', direction: str = 'fwd'):
         route_dict_ways.append(way_list)
     return route_dict_ways
 
-def detect_path_square(paths_list: list = False):
+def info_path_segments(paths_list: list = False):
     """
     Defines the extreme northeast and southwest points of the path segment
     Attention! For simplicity, it is calculated only for the northern hemisphere and east longitude.
@@ -214,21 +214,25 @@ def detect_path_square(paths_list: list = False):
      0 - extrime SW points
      1- extrime NE points
     """
-    squares = []
+    segments = []
     for point_list in paths_list:
         path_square = [{'lat': 90000000, 'lon': 180000000}, {'lat': 0, 'lon': 0}]
         for point in point_list:
             for coordinate_type in ['lat', 'lon']:
-                if point[coordinate_type] < path_square[0][coordinate_type]:\
+                if point[coordinate_type] < path_square[0][coordinate_type]:
                     path_square[0][coordinate_type] = point[coordinate_type]
                 if point[coordinate_type] > path_square[1][coordinate_type]:
                     path_square[1][coordinate_type] = point[coordinate_type]
-        squares.append({'start_lat': point_list,
-                        'start_lon': point_list,
-                        'end_lat': point_list,
-                        'end_lon': point_list,
-                            path_square})
-    return path_square
+        segments.append({'start_lat': point_list[0]['lat'],
+                         'start_lon': point_list[0]['lon'],
+                         'end_lat': point_list[-1]['lat'],
+                         'end_lon': point_list[-1]['lon'],
+                         'sw_lat': path_square[0]['lat'],
+                         'sw_lon': path_square[0]['lon'],
+                         'ne_lat': path_square[1]['lat'],
+                         'ne_lon': path_square[1]['lon']},
+        )
+    return segments
 
 
 def pull_route_stations(route_id: str = '02', direction : str = 'fwd'):
@@ -248,7 +252,7 @@ def pull_route_stations(route_id: str = '02', direction : str = 'fwd'):
         temp_dict = {'station_id': station['stoppointId'],
                      'station_name': station['stoppointName'],
                      'lat': coord_to_int(lat),
-                     'lot': coord_to_int(lon),
+                     'lon': coord_to_int(lon),
                      'station_note': station_note,
                      }
         stoppoints_list.append(temp_dict)
@@ -259,24 +263,42 @@ def main_logic():
     client = MongoClient()
     db = client.ctrans
     routes = db.routes
-    stations = db.stations
-    path = db.paths
+    segments = db.paths
     for route in ROUTES_IDS:
         # Parse busstops data
-        route_data['stations_fwd'] = pull_route_stations(route_id=route, direction="fwd")
-        route_data['stations_bkwd'] = pull_route_stations(route_id=route, direction="bkwd")
+        for direction in ['fwd', 'bkwd']:
+            stations_data = pull_route_stations(route_id=route, direction=direction)
+            for station in stations_data:
+                if not db.stations.find_one({'station_id': station['station_id']}):
+                    db.stations.insert_one(station)
+        # Parse paths data
+        for direction in ['fwd', 'bkwd']:
+            paths_data = pull_route_geometry(route_id=route, direction=direction)
+            segments = info_path_segments(paths_data)
+            for segment in segments:
+                start_station_info = db.stations.find_one({'lat': segment['start_lat'],
+                                                           'lon': segment['start_lon']},
+                                                          {"station_id": 1, "_id": 0})
+                end_station_info = db.stations.find_one({'lat': segment['end_lat'],
+                                                         'lon': segment['end_lon']},
+                                                        {"station_id": 1, "_id": 0})
+                segment['start_station'] = start_station_info['station_id']
+                segment['end_station'] = end_station_info['station_id']
+                segment['route'] = route
+                db.segments.insert_one(segment)
         # Parse routers data
         route_data = pull_route_info(route_id=route)
         if not route_data:
             continue
-        route_data['geometry_fwd'] = pull_route_geometry(route_id=route, direction="fwd")
-        route_data['geometry_bkwd'] = pull_route_geometry(route_id=route, direction="bkwd")
 
-        route_data['path_squares_fwd'] = detect_path_square([route_data['geometry_fwd'][0], route_data['geometry_fwd'][1]])
+
+    #     route_data['path_squares_fwd'] = info_path_segments([route_data['geometry_fwd'][0], route_data['geometry_fwd'][1]])
+    # #     routes.insert_one(route_data)
+    #     route_data['geometry_fwd'] = pull_route_stations(route_id=route, direction="fwd")
+    #     route_data['geometry_bkwd'] = pull_route_stations(route_id=route, direction="bkwd")
     #     routes.insert_one(route_data)
     return 0
 
 
-# Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     exit(main_logic())
